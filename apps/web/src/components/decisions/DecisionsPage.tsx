@@ -301,7 +301,7 @@ function DecisionDetail({
           <ArrowLeftIcon />
           All decisions
         </Button>
-        <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="outline">{decision ? "Decision" : "Question"}</Badge>
           {isBlocking(item) ? <Badge variant="warning">Blocking</Badge> : null}
           {decision ? (
@@ -311,15 +311,17 @@ function DecisionDetail({
               <Badge variant="error">Can't be undone</Badge>
             )
           ) : null}
-          <span>from</span>
+        </div>
+        <div className="flex min-w-0 items-center gap-1 text-muted-foreground text-xs">
+          <span className="shrink-0">from</span>
           <Link
             to="/$environmentId/$threadId"
             params={{ environmentId: item.environmentId, threadId: item.threadId }}
-            className="text-foreground underline underline-offset-2"
+            className="min-w-0 truncate text-foreground underline underline-offset-2"
           >
             {item.threadTitle}
           </Link>
-          <span>
+          <span className="shrink-0">
             · {account} · {relativeAge(item.createdAt, nowMinute)}
           </span>
         </div>
