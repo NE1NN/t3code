@@ -40,12 +40,17 @@ import { isExactServiceVersion, SERVICE_LAUNCHER_PROTOCOL } from "./serviceProto
 
 const PREFLIGHT_TIMEOUT = Duration.seconds(30);
 
+/**
+ * Agent Desk fork: the server is built from source and self-hosted, so it never
+ * advertises a boot-service update that would swap it for the official npm release.
+ * `update` still refuses on its own because the fork never runs under the
+ * `t3 service install` launcher.
+ */
 export function resolveServerSelfUpdateCapability(input: {
   readonly desktopManaged: boolean;
   readonly launcherManaged: boolean;
 }): ServerSelfUpdateCapability | null {
-  if (input.desktopManaged) return "desktop-managed" as const;
-  return input.launcherManaged ? ("boot-service" as const) : null;
+  return input.desktopManaged ? ("desktop-managed" as const) : null;
 }
 
 export class ServerSelfUpdate extends Context.Service<
