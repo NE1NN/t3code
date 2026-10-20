@@ -321,7 +321,7 @@ function DecisionDetail({
       </div>
 
       {decision && decision.media.length > 0 ? (
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3.5">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3.5">
           {decision.media.map((media) => (
             <DecisionMediaCard key={media.attachmentId} item={item} media={media} />
           ))}
