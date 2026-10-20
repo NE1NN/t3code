@@ -20,6 +20,7 @@ import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   type ChatAttachment,
   CommandId,
+  DECISION_QUESTION_ID,
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   MessageId,
@@ -42,6 +43,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2RuntimeRequest,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
   type OrchestrationV2RunAttempt,
@@ -484,6 +486,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "queued-run.edit":
     case "runtime-request.respond":
     case "thread.user-input.dismiss":
+    case "decision.discuss":
     case "checkpoint.rollback":
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
@@ -497,6 +500,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.created.record":
       return command.parentThreadId;
     case "secret_request.record":
+    case "decision.record":
+    case "decision.update":
       return command.threadId;
     case "thread.fork":
     case "thread.merge_back":
@@ -7605,6 +7610,290 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const dispatchDecisionRecord = Effect.fn("Orchestrator.dispatchDecisionRecord")(function* (
+    command: Extract<OrchestrationV2InternalCommand, { readonly type: "decision.record" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const projection = yield* projectionStore
+      .getThreadRecords(
+        command.threadId,
+        ["runs", "attempts", "providerTurns", "runtimeRequests"],
+        { turnItemTypes: [], messageRoles: [] },
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+    if (projection.runtimeRequests.some((request) => request.id === command.requestId)) return;
+    const run = projection.runs.find((candidate) => candidate.id === command.runId);
+    if (run === undefined) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Run ${command.runId} was not found.`,
+      });
+    }
+    const now = yield* DateTime.now;
+    const providerTurnId = providerTurnForRun(projection, run)?.id ?? null;
+    const node: OrchestrationV2ExecutionNode = {
+      id: command.requestNodeId,
+      threadId: command.threadId,
+      runId: run.id,
+      parentNodeId: command.parentNodeId,
+      rootNodeId: run.rootNodeId ?? command.parentNodeId,
+      kind: "user_input_request",
+      status: "waiting",
+      countsForRun: false,
+      providerThreadId: run.providerThreadId,
+      providerTurnId,
+      nativeItemRef: null,
+      runtimeRequestId: command.requestId,
+      checkpointScopeId: null,
+      startedAt: now,
+      completedAt: null,
+    };
+    const request: OrchestrationV2RuntimeRequest = {
+      id: command.requestId,
+      nodeId: command.requestNodeId,
+      providerTurnId,
+      nativeRequestRef: null,
+      kind: "user_input",
+      status: "pending",
+      responseCapability: { type: "message" },
+      createdAt: now,
+      resolvedAt: null,
+    };
+    const turnItem: OrchestrationV2TurnItem = {
+      id: command.turnItemId,
+      threadId: command.threadId,
+      runId: run.id,
+      nodeId: command.requestNodeId,
+      providerThreadId: run.providerThreadId,
+      providerTurnId,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: yield* nextTurnItemOrdinal(projection),
+      status: "waiting",
+      title: command.title,
+      startedAt: now,
+      completedAt: null,
+      updatedAt: now,
+      type: "user_input_request",
+      requestId: command.requestId,
+      questions: [
+        {
+          id: DECISION_QUESTION_ID,
+          header: "Decision",
+          question: command.title,
+          options: command.options,
+        },
+      ],
+      responseMode: "message",
+      decision: command.decision,
+    };
+    const emitEvent = emit(events, command);
+    const base = {
+      threadId: command.threadId,
+      runId: run.id,
+      nodeId: command.requestNodeId,
+      providerInstanceId: run.providerInstanceId,
+      occurredAt: now,
+    };
+    yield* emitEvent({ type: "node.updated", ...base, payload: node });
+    yield* emitEvent({ type: "runtime-request.updated", ...base, payload: request });
+    yield* emitEvent({ type: "turn-item.updated", ...base, payload: turnItem });
+  });
+
+  const loadPendingDecision = Effect.fn("Orchestrator.loadPendingDecision")(function* (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      { readonly type: "decision.update" | "decision.discuss" }
+    >,
+  ) {
+    const context = yield* projectionStore
+      .getRuntimeResponseContext(command.threadId, command.requestId)
+      .pipe(Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })));
+    const item = context.item;
+    if (
+      context.request?.status !== "pending" ||
+      item?.type !== "user_input_request" ||
+      item.decision === undefined
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause:
+          context.request === undefined
+            ? `Decision ${command.requestId} was not found.`
+            : "This decision is already settled.",
+      });
+    }
+    return { item, decision: item.decision };
+  });
+
+  const emitDecisionItem = (
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    command: OrchestrationV2ServerCommand,
+    item: Extract<OrchestrationV2TurnItem, { readonly type: "user_input_request" }>,
+    now: DateTime.Utc,
+  ) =>
+    emit(
+      events,
+      command,
+    )({
+      type: "turn-item.updated",
+      threadId: item.threadId,
+      ...(item.runId === null ? {} : { runId: item.runId }),
+      ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+      occurredAt: now,
+      payload: { ...item, updatedAt: now },
+    });
+
+  const dispatchDecisionUpdate = Effect.fn("Orchestrator.dispatchDecisionUpdate")(function* (
+    command: Extract<OrchestrationV2InternalCommand, { readonly type: "decision.update" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const { item, decision } = yield* loadPendingDecision(command);
+    const now = yield* DateTime.now;
+    yield* emitDecisionItem(
+      events,
+      command,
+      {
+        ...item,
+        questions:
+          command.options === undefined
+            ? item.questions
+            : item.questions.map((question) =>
+                question.id === DECISION_QUESTION_ID
+                  ? { ...question, options: command.options ?? question.options }
+                  : question,
+              ),
+        decision: {
+          ...decision,
+          ...(command.recommendedOption === undefined
+            ? {}
+            : { recommendedOption: command.recommendedOption }),
+          ...(command.agentWaiting === undefined ? {} : { agentWaiting: command.agentWaiting }),
+          messages:
+            command.agentMessage === undefined
+              ? decision.messages
+              : [
+                  ...decision.messages,
+                  {
+                    id: `${command.commandId}:agent`,
+                    author: "agent" as const,
+                    text: command.agentMessage,
+                    createdAt: DateTime.formatIso(now),
+                  },
+                ],
+        },
+      },
+      now,
+    );
+  });
+
+  const dispatchDecisionDiscuss = Effect.fn("Orchestrator.dispatchDecisionDiscuss")(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "decision.discuss" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const { item, decision } = yield* loadPendingDecision(command);
+    const now = yield* DateTime.now;
+    yield* emitDecisionItem(
+      events,
+      command,
+      {
+        ...item,
+        decision: {
+          ...decision,
+          // A waiting request_decision call returns this message as its result.
+          agentWaiting: false,
+          messages: [
+            ...decision.messages,
+            {
+              id: `${command.commandId}:user`,
+              author: "user",
+              text: command.text,
+              createdAt: DateTime.formatIso(now),
+            },
+          ],
+        },
+      },
+      now,
+    );
+    if (decision.agentWaiting) return;
+    const title = item.questions[0]?.question ?? "your decision";
+    yield* dispatchAsyncReply(
+      command,
+      MessageId.make(`decision-discuss:${command.commandId}`),
+      `About the decision "${title}" (decisionId ${command.requestId}):\n${command.text}\n\nAnswer with reply_to_decision.`,
+      events,
+      effects,
+    );
+  });
+
+  /** Sends a reply to an agent that asked without waiting: steer the live turn when the provider can, else queue it after. */
+  const dispatchAsyncReply = Effect.fn("Orchestrator.dispatchAsyncReply")(function* (
+    command: Extract<
+      OrchestrationV2Command,
+      { readonly type: "runtime-request.respond" | "decision.discuss" }
+    >,
+    messageId: MessageId,
+    text: string,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    let dispatchMode: Extract<
+      OrchestrationV2Command,
+      { type: "message.dispatch" }
+    >["dispatchMode"] = {
+      type: "queue_after_active",
+    };
+    const {
+      run: activeRun,
+      providerThread: activeProviderThread,
+      providerTurn: activeProviderTurn,
+    } = yield* projectionStore
+      .getRunningTurnContext(command.threadId)
+      .pipe(mapDispatchError(command));
+    if (activeRun && activeProviderTurn && activeProviderThread?.providerSessionId) {
+      const activeSession = yield* providerSessions
+        .get(activeProviderThread.providerSessionId)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause,
+              }),
+          ),
+        );
+      if (
+        Option.isSome(activeSession) &&
+        activeSession.value.providerSession.capabilities.turns.supportsActiveSteering
+      ) {
+        dispatchMode = { type: "steer_active", targetRunId: activeRun.id };
+      }
+    }
+    return yield* dispatchMessage(
+      {
+        type: "message.dispatch",
+        commandId: command.commandId,
+        threadId: command.threadId,
+        messageId,
+        text,
+        attachments: [],
+        createdBy: "user",
+        creationSource: "server",
+        dispatchMode,
+      },
+      events,
+      effects,
+    );
+  });
+
   const dispatchRuntimeRequestRespond = Effect.fn("Orchestrator.dispatchRuntimeRequestRespond")(
     function* (
       command: Extract<OrchestrationV2Command, { readonly type: "runtime-request.respond" }>,
@@ -7756,6 +8045,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: "The question for this request was not found.",
           });
         }
+        // The agent's request_decision call is still open and returns the answer itself.
+        if (approvalTurnItem.decision?.agentWaiting === true) return;
         const replies: string[] = [];
         for (const question of approvalTurnItem.questions) {
           const answer = answers?.[question.id];
@@ -7776,51 +8067,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: "Enter an answer before sending.",
           });
         }
-        let dispatchMode: Extract<
-          OrchestrationV2Command,
-          { type: "message.dispatch" }
-        >["dispatchMode"] = {
-          type: "queue_after_active",
-        };
-        const {
-          run: activeRun,
-          providerThread: activeProviderThread,
-          providerTurn: activeProviderTurn,
-        } = yield* projectionStore
-          .getRunningTurnContext(command.threadId)
-          .pipe(mapDispatchError(command));
-        if (activeRun && activeProviderTurn && activeProviderThread?.providerSessionId) {
-          const activeSession = yield* providerSessions
-            .get(activeProviderThread.providerSessionId)
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestratorDispatchError({
-                    commandId: command.commandId,
-                    commandType: command.type,
-                    cause,
-                  }),
-              ),
-            );
-          if (
-            Option.isSome(activeSession) &&
-            activeSession.value.providerSession.capabilities.turns.supportsActiveSteering
-          ) {
-            dispatchMode = { type: "steer_active", targetRunId: activeRun.id };
-          }
-        }
-        return yield* dispatchMessage(
-          {
-            type: "message.dispatch",
-            commandId: command.commandId,
-            threadId: command.threadId,
-            messageId: MessageId.make(`async-answer:${command.requestId}`),
-            text: replies.join("\n\n"),
-            attachments: [],
-            createdBy: "user",
-            creationSource: "server",
-            dispatchMode,
-          },
+        return yield* dispatchAsyncReply(
+          command,
+          MessageId.make(`async-answer:${command.requestId}`),
+          replies.join("\n\n"),
           events,
           effects,
         );
@@ -11293,6 +11543,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.user-input.dismiss":
         yield* dispatchThreadUserInputDismiss(command, events, effects);
         break;
+      case "decision.discuss":
+        yield* dispatchDecisionDiscuss(command, events, effects);
+        break;
       case "subagent.stop":
         yield* dispatchSubagentStop(command, events, effects);
         break;
@@ -11414,6 +11667,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "secret_request.record":
         yield* dispatchSecretRequestRecord(command, events);
+        break;
+      case "decision.record":
+        yield* dispatchDecisionRecord(command, events);
+        break;
+      case "decision.update":
+        yield* dispatchDecisionUpdate(command, events);
         break;
       default:
         return yield* dispatchUnsupported(command);

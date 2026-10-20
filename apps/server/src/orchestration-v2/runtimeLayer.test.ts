@@ -11,6 +11,7 @@ import {
   CheckpointRef,
   CommandId,
   ContextTransferId,
+  DECISION_QUESTION_ID,
   EventId,
   MessageId,
   NodeId,
@@ -1454,6 +1455,228 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         settledProjection.turnItems.find((item) => item.id === settled.itemId)?.status,
         "cancelled",
       );
+    }),
+  );
+
+  it.effect("keeps decision answers and discussion out of the thread while the agent waits", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+
+      const seedDecision = Effect.fn("runtimeLayerTest.seedDecision")(function* (
+        name: string,
+        agentWaiting: boolean,
+      ) {
+        const threadId = ThreadId.make(`${name}-thread`);
+        const requestId = RuntimeRequestId.make(`${name}-request`);
+        const nodeId = NodeId.make(`${name}-node`);
+        const now = yield* DateTime.now;
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`${name}-create`),
+          createdBy: "user",
+          creationSource: "web",
+          threadId,
+          projectId: ProjectId.make(`${name}-project`),
+          title: "Decision thread",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        yield* eventSink.write({
+          commandId: CommandId.make(`${name}-seed`),
+          events: [
+            {
+              id: EventId.make(`${name}-node-event`),
+              type: "node.updated",
+              threadId,
+              nodeId,
+              occurredAt: now,
+              payload: {
+                id: nodeId,
+                threadId,
+                runId: null,
+                parentNodeId: null,
+                rootNodeId: nodeId,
+                kind: "user_input_request",
+                status: "waiting",
+                countsForRun: false,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                runtimeRequestId: requestId,
+                checkpointScopeId: null,
+                startedAt: now,
+                completedAt: null,
+              },
+            },
+            {
+              id: EventId.make(`${name}-request-event`),
+              type: "runtime-request.updated",
+              threadId,
+              nodeId,
+              occurredAt: now,
+              payload: {
+                id: requestId,
+                nodeId,
+                providerTurnId: null,
+                nativeRequestRef: null,
+                kind: "user_input",
+                status: "pending",
+                responseCapability: { type: "message" },
+                createdAt: now,
+                resolvedAt: null,
+              },
+            },
+            {
+              id: EventId.make(`${name}-item-event`),
+              type: "turn-item.updated",
+              threadId,
+              nodeId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make(`${name}-item`),
+                type: "user_input_request",
+                threadId,
+                runId: null,
+                nodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 0,
+                status: "waiting",
+                title: "Which render ships?",
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                requestId,
+                responseMode: "message",
+                questions: [
+                  {
+                    id: DECISION_QUESTION_ID,
+                    header: "Decision",
+                    question: "Which render ships?",
+                    options: [
+                      { label: "Take A", description: "Ship take A." },
+                      { label: "Take B", description: "Ship take B." },
+                    ],
+                  },
+                ],
+                decision: {
+                  context: "Two takes of the 60s render.",
+                  recommendedOption: "Take A",
+                  reversible: true,
+                  blocking: agentWaiting,
+                  media: [],
+                  messages: [],
+                  agentWaiting,
+                },
+              },
+            },
+          ],
+        });
+        return { threadId, requestId };
+      });
+      const decisionOf = Effect.fn("runtimeLayerTest.decisionOf")(function* (threadId: ThreadId) {
+        const item = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+          (candidate) => candidate.type === "user_input_request",
+        );
+        return item?.type === "user_input_request" ? item.decision : undefined;
+      });
+
+      const waiting = yield* seedDecision("runtime-decision-waiting", true);
+      const pending = yield* projectionStore.getPendingQuestions();
+      assert.deepEqual(
+        pending.map((question) => question.request.id),
+        [waiting.requestId],
+      );
+      assert.equal(pending[0]?.item.decision?.context, "Two takes of the 60s render.");
+
+      yield* orchestrator.dispatch({
+        type: "decision.discuss",
+        commandId: CommandId.make("runtime-decision-waiting-discuss"),
+        threadId: waiting.threadId,
+        requestId: waiting.requestId,
+        text: "Is the logo cropped in take A?",
+      });
+      const discussed = yield* decisionOf(waiting.threadId);
+      assert.equal(discussed?.agentWaiting, false);
+      assert.deepEqual(
+        discussed?.messages.map((message) => [message.author, message.text]),
+        [["user", "Is the logo cropped in take A?"]],
+      );
+      assert.deepEqual((yield* orchestrator.getThreadProjection(waiting.threadId)).messages, []);
+
+      yield* orchestrator.dispatch({
+        type: "decision.update",
+        commandId: CommandId.make("runtime-decision-waiting-update"),
+        threadId: waiting.threadId,
+        requestId: waiting.requestId,
+        agentMessage: "No, it sits inside the safe area.",
+        recommendedOption: "Take B",
+        agentWaiting: true,
+      });
+      const updated = yield* decisionOf(waiting.threadId);
+      assert.equal(updated?.agentWaiting, true);
+      assert.equal(updated?.recommendedOption, "Take B");
+      assert.equal(updated?.messages.at(-1)?.author, "agent");
+
+      const answeredBefore = yield* projectionStore.countAnsweredQuestions(DateTime.makeUnsafe(0));
+      yield* orchestrator.dispatch({
+        type: "runtime-request.respond",
+        commandId: CommandId.make("runtime-decision-waiting-answer"),
+        threadId: waiting.threadId,
+        requestId: waiting.requestId,
+        answers: { [DECISION_QUESTION_ID]: "Take B" },
+      });
+      const answered = yield* orchestrator.getThreadProjection(waiting.threadId);
+      assert.equal(answered.runtimeRequests[0]?.status, "resolved");
+      assert.deepEqual(answered.messages, []);
+      assert.deepEqual(yield* projectionStore.getPendingQuestions(), []);
+      assert.equal(
+        yield* projectionStore.countAnsweredQuestions(DateTime.makeUnsafe(0)),
+        answeredBefore + 1,
+      );
+
+      const settled = yield* orchestrator
+        .dispatch({
+          type: "decision.discuss",
+          commandId: CommandId.make("runtime-decision-waiting-late"),
+          threadId: waiting.threadId,
+          requestId: waiting.requestId,
+          text: "Actually wait.",
+        })
+        .pipe(Effect.result);
+      assert.equal(settled._tag, "Failure");
+
+      const async = yield* seedDecision("runtime-decision-async", false);
+      yield* orchestrator.dispatch({
+        type: "decision.discuss",
+        commandId: CommandId.make("runtime-decision-async-discuss"),
+        threadId: async.threadId,
+        requestId: async.requestId,
+        text: "Can you try a shorter hook?",
+      });
+      const asyncThread = yield* orchestrator.getThreadProjection(async.threadId);
+      assert.equal(asyncThread.runtimeRequests[0]?.status, "pending");
+      assert.equal(asyncThread.messages.length, 1);
+      assert.include(asyncThread.messages[0]?.text ?? "", "Can you try a shorter hook?");
+      assert.include(asyncThread.messages[0]?.text ?? "", `decisionId ${async.requestId}`);
+
+      yield* orchestrator.dispatch({
+        type: "runtime-request.respond",
+        commandId: CommandId.make("runtime-decision-async-answer"),
+        threadId: async.threadId,
+        requestId: async.requestId,
+        answers: { [DECISION_QUESTION_ID]: "Take A" },
+      });
+      const asyncAnswered = yield* orchestrator.getThreadProjection(async.threadId);
+      assert.equal(asyncAnswered.messages.length, 2);
+      assert.include(asyncAnswered.messages[1]?.text ?? "", "Take A");
     }),
   );
 

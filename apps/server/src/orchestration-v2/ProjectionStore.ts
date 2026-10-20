@@ -178,6 +178,13 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "snoozedUntil"
 >;
 
+/** An unanswered question in an active thread, for the cross-thread decisions queue. */
+export interface ProjectionPendingQuestion {
+  readonly thread: OrchestrationV2AppThread;
+  readonly request: OrchestrationV2ThreadProjection["runtimeRequests"][number];
+  readonly item: Extract<OrchestrationV2TurnItem, { readonly type: "user_input_request" }>;
+}
+
 export type ProjectionThreadPullRequests = Pick<
   OrchestrationV2AppThread,
   "id" | "projectId" | "lineage" | "settledOverride" | "settledAt" | "pullRequests"
@@ -454,6 +461,13 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadPullRequests>, ProjectionStoreV2Error>;
+  readonly getPendingQuestions: () => Effect.Effect<
+    ReadonlyArray<ProjectionPendingQuestion>,
+    ProjectionStoreV2Error
+  >;
+  readonly countAnsweredQuestions: (
+    since: DateTime.Utc,
+  ) => Effect.Effect<number, ProjectionStoreV2Error>;
   readonly getThreadWorktreePaths: (options?: {
     readonly includeArchived?: boolean;
   }) => Effect.Effect<
@@ -5215,10 +5229,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         AND type = 'dynamic_tool'
         AND (payload_json LIKE '%htmlRender%' OR payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`})
     `,
+        sql<{ id: string }>`
+      SELECT DISTINCT json_extract(media.value, '$.attachmentId') AS id
+      FROM orchestration_v2_projection_turn_items AS item,
+        json_each(item.payload_json, '$.decision.media') AS media
+      WHERE item.thread_id = ${threadId}
+        AND item.type = 'user_input_request'
+    `,
       ]).pipe(
-        Effect.map(([messages, renders]) => [
+        Effect.map(([messages, renders, decisionMedia]) => [
           ...new Set([
             ...messages.map((row) => row.id),
+            ...decisionMedia.map((row) => row.id),
             ...threadHtmlRenderAttachmentIds(
               threadId,
               renders.map((row) => {
@@ -6093,6 +6115,57 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
       );
 
+    const getPendingQuestions: ProjectionStoreV2Shape["getPendingQuestions"] = Effect.fn(
+      "ProjectionStore.getPendingQuestions",
+    )(
+      function* () {
+        const rows = yield* sql<{
+          readonly thread_json: string;
+          readonly request_json: string;
+          readonly item_json: string;
+        }>`
+          SELECT
+            thread.payload_json AS thread_json,
+            request.payload_json AS request_json,
+            item.payload_json AS item_json
+          FROM orchestration_v2_projection_runtime_requests AS request
+          JOIN orchestration_v2_projection_threads AS thread
+            ON thread.thread_id = request.thread_id
+          JOIN orchestration_v2_projection_turn_items AS item
+            ON item.node_id = request.node_id AND item.type = 'user_input_request'
+          WHERE request.kind = 'user_input'
+            AND request.status = 'pending'
+            AND thread.deleted_at IS NULL
+            AND json_extract(thread.payload_json, '$.archivedAt') IS NULL
+          ORDER BY request.created_at ASC, request.runtime_request_id ASC
+        `;
+        const questions: Array<ProjectionPendingQuestion> = [];
+        for (const row of rows) {
+          const item = yield* decodeTurnItemPayload(row.item_json);
+          if (item.type !== "user_input_request") continue;
+          questions.push({
+            thread: yield* decodeThreadPayload(row.thread_json),
+            request: yield* decodeRuntimeRequestPayload(row.request_json),
+            item,
+          });
+        }
+        return questions;
+      },
+      Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+    );
+
+    const countAnsweredQuestions: ProjectionStoreV2Shape["countAnsweredQuestions"] = (since) =>
+      sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count
+        FROM orchestration_v2_projection_runtime_requests
+        WHERE kind = 'user_input'
+          AND status = 'resolved'
+          AND resolved_at >= ${DateTime.formatIso(since)}
+      `.pipe(
+        Effect.map((rows) => rows[0]?.count ?? 0),
+        Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+      );
+
     const getThreadWorktreePaths: ProjectionStoreV2Shape["getThreadWorktreePaths"] = (options) =>
       sql<{ readonly thread_id: string; readonly worktree_path: string }>`
         SELECT thread_id, json_extract(payload_json, '$.worktreePath') AS worktree_path
@@ -6472,6 +6545,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThread,
       getSettlementCandidates,
       getThreadsWithPullRequests,
+      getPendingQuestions,
+      countAnsweredQuestions,
       getThreadWorktreePaths,
       getThreadProjection,
       getTurnStartContext,
@@ -6633,6 +6708,44 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 ? [{ threadId: thread.id, worktreePath: thread.worktreePath }]
                 : [],
             ),
+          ),
+        ),
+      getPendingQuestions: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .filter(({ thread }) => thread.deletedAt === null && thread.archivedAt === null)
+              .flatMap(({ thread, runtimeRequests, turnItems }) =>
+                runtimeRequests.flatMap((request) => {
+                  if (request.kind !== "user_input" || request.status !== "pending") return [];
+                  const item = turnItems.find(
+                    (candidate) =>
+                      candidate.type === "user_input_request" &&
+                      candidate.nodeId === request.nodeId,
+                  );
+                  return item?.type === "user_input_request" ? [{ thread, request, item }] : [];
+                }),
+              )
+              .toSorted(
+                (left, right) =>
+                  DateTime.toEpochMillis(left.request.createdAt) -
+                  DateTime.toEpochMillis(right.request.createdAt),
+              ),
+          ),
+        ),
+      countAnsweredQuestions: (since) =>
+        Ref.get(replayState).pipe(
+          Effect.map(
+            (state) =>
+              [...state.projections.values()].flatMap(({ runtimeRequests }) =>
+                runtimeRequests.filter(
+                  (request) =>
+                    request.kind === "user_input" &&
+                    request.status === "resolved" &&
+                    request.resolvedAt !== null &&
+                    DateTime.toEpochMillis(request.resolvedAt) >= DateTime.toEpochMillis(since),
+                ),
+              ).length,
           ),
         ),
       getThreadsWithPullRequests: (threadId) =>
@@ -6804,6 +6917,11 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 projection.turnItems.flatMap((item) =>
                   item.type === "dynamic_tool" ? [item] : [],
                 ),
+              ),
+              ...projection.turnItems.flatMap((item) =>
+                item.type === "user_input_request"
+                  ? (item.decision?.media ?? []).map((media) => media.attachmentId)
+                  : [],
               ),
             ]),
           ]),

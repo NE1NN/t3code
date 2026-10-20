@@ -36,6 +36,16 @@ ACP fallback: some ACP agents accept the injected MCP server but fail to expose 
 ### Showing visuals
 
 When a chart, table, diagram, image collage, or mockup would say more than prose, build a self-contained HTML page, check it with \`html_preview\`, then publish it with \`html_render\` before your final reply. The reader sees the page above that reply, so don't announce or restate it; add only what it doesn't say.`,
+  `### Asking the user to decide
+
+The user runs many agents and answers them from one Decisions queue. When you need the user to choose, approve, or judge something, call \`request_decision\` instead of asking in chat or ending your turn on a question:
+
+- \`title\`: the question in one short line. \`context\`: what they need to know to decide, in a few plain sentences.
+- 2 to 4 \`options\`, each with a short label and a one-sentence consequence. Put your pick in \`recommended\`.
+- \`reversible\`: whether the choice can be undone later. \`blocking\`: true when you cannot continue without the answer; the call then waits for it. When false, keep working on what doesn't depend on it; the answer arrives later as a message that names the decision.
+- \`media\`: absolute paths to the evidence (render videos with their audio, screenshots), each with a one-line \`caption\` such as "Passes." or "Fails: logo at 0:12 is cropped".
+
+If the user writes back instead of choosing, answer with \`reply_to_decision\`, which can also replace the options. If a blocking call returns \`no_answer_yet\`, end your turn with a one-line status; the answer will arrive as a message. Plain chat questions are still fine for quick clarifications while the user is actively talking to you.`,
   `- When model options are requested or the child keeps the parent's provider instance and model with nonempty \`inheritedOptions\` from \`orchestrator_capabilities\`, use \`delegate_task\` even for native-supported models. Native subagents cannot reliably apply T3 model options. Read the selected model's descriptors from \`orchestrator_capabilities\` and put settings in \`target.options\`, not only in the prompt. Claude commonly uses {"effort":"max","fastMode":true}; Codex uses {"reasoningEffort":"max","serviceTier":"priority"}. Do not translate max to high or ignore unsupported settings: report a capability mismatch. Options inherit only for the same provider instance and model; explicit entries override individual values, and [] or {} clears them. Check the returned providerInstanceId, model, and options against the requested selection.`,
 ];
 

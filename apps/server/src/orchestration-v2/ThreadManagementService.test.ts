@@ -4,6 +4,7 @@ import {
   MessageId,
   NodeId,
   type OrchestrationV2Command,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type OrchestrationV2ProviderThread,
@@ -1086,7 +1087,7 @@ const accountB = ProviderInstanceId.make("claude_b");
 
 const layerBalancingTest = (input: {
   readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "status">>;
-  readonly dispatched: Array<OrchestrationV2Command>;
+  readonly dispatched: Array<OrchestrationV2ServerCommand>;
   readonly moves: Array<ClaudeAccountBalancer.ClaudeAccountMoveInput>;
 }) =>
   ThreadManagementService.layer.pipe(
@@ -1127,7 +1128,7 @@ const layerBalancingTest = (input: {
         providerInstances: {
           [accountA]: { driver: "claudeAgent", enabled: true },
           [accountB]: { driver: "claudeAgent", enabled: true },
-          claude_c: { driver: "claudeAgent", enabled: true },
+          [ProviderInstanceId.make("claude_c")]: { driver: "claudeAgent", enabled: true },
         },
       }),
     ),
@@ -1151,7 +1152,7 @@ const balancingMessage = (
 });
 
 it.effect("balancing starts a new thread on the chosen account and logs it", () => {
-  const dispatched: Array<OrchestrationV2Command> = [];
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
   const moves: Array<ClaudeAccountBalancer.ClaudeAccountMoveInput> = [];
   return Effect.gen(function* () {
     const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -1178,7 +1179,7 @@ it.effect("balancing starts a new thread on the chosen account and logs it", () 
 });
 
 it.effect("balancing moves an idle thread before its next message", () => {
-  const dispatched: Array<OrchestrationV2Command> = [];
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
   const moves: Array<ClaudeAccountBalancer.ClaudeAccountMoveInput> = [];
   return Effect.gen(function* () {
     const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -1194,7 +1195,7 @@ it.effect("balancing moves an idle thread before its next message", () => {
 });
 
 it.effect("balancing leaves a running thread and an explicit account choice alone", () => {
-  const dispatched: Array<OrchestrationV2Command> = [];
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
   const moves: Array<ClaudeAccountBalancer.ClaudeAccountMoveInput> = [];
   const runningLayer = layerBalancingTest({ runs: [{ status: "running" }], dispatched, moves });
   const idleLayer = layerBalancingTest({ runs: [], dispatched, moves });
