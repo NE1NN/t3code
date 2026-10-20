@@ -944,6 +944,14 @@ const make = Effect.gen(function* () {
         let runId: RunId | null = null;
         let messageWasAlreadyAccepted = false;
         if (input.initialMessage !== undefined) {
+          // Claude account balancing may have started the thread on another account.
+          const modelSelection =
+            input.reuseExistingThread === true
+              ? input.modelSelection
+              : (yield* threads
+                  .getThreadRecords(threadId, [])
+                  .pipe(Effect.mapError(mapError(input, "create-thread", threadId)))).thread
+                  .modelSelection;
           const messageCommandId = CommandId.make(`${input.commandId}:initial-message`);
           const messageReceipt = yield* readReceipt(input, messageCommandId);
           messageWasAlreadyAccepted = Option.isSome(messageReceipt);
@@ -968,7 +976,7 @@ const make = Effect.gen(function* () {
               attachments: input.initialMessage.attachments,
               ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
               ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
-              modelSelection: input.modelSelection,
+              modelSelection,
               dispatchMode: { type: "defer_start", workspaceStrategy },
               createdBy: input.createdBy,
               creationSource: input.creationSource,

@@ -38,6 +38,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as ClaudeAccountBalancer from "../provider/ClaudeAccountBalancer.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, type DispatchModeRefusal } from "./DispatchModeLimit.ts";
 
@@ -1077,3 +1078,143 @@ it.effect.each([
     expect(dispatched).toEqual(settles ? ["thread.settle"] : []);
   }),
 );
+
+const balancingProjectId = ProjectId.make("project:thread-management:balancing");
+const balancingThreadId = ThreadId.make("thread:thread-management:balancing");
+const accountA = ProviderInstanceId.make("claude_a");
+const accountB = ProviderInstanceId.make("claude_b");
+
+const layerBalancingTest = (input: {
+  readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "status">>;
+  readonly dispatched: Array<OrchestrationV2Command>;
+  readonly moves: Array<ClaudeAccountBalancer.ClaudeAccountMoveInput>;
+}) =>
+  ThreadManagementService.layer.pipe(
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(
+      Layer.mock(Orchestrator.OrchestratorV2)({
+        getThreadRecords: () =>
+          Effect.succeed({
+            thread: {
+              id: balancingThreadId,
+              projectId: balancingProjectId,
+              title: "Balanced thread",
+              deletedAt: null,
+              modelSelection: { instanceId: accountA, model: "claude-test" },
+            },
+            runs: input.runs,
+          } as unknown as OrchestrationV2ThreadProjection),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            input.dispatched.push(command);
+            return { sequence: 1, storedEvents: [] } as never;
+          }),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ClaudeAccountBalancer.ClaudeAccountBalancer, {
+        enabled: Effect.succeed(true),
+        placeNewThread: () => Effect.succeed(accountB),
+        chooseMove: () => Effect.succeed({ instanceId: accountB, reason: "limited" as const }),
+        noteLimited: () => Effect.void,
+        recordMove: (move) => Effect.sync(() => input.moves.push(move)),
+        refreshStaleReadings: Effect.void,
+        getStatus: Effect.succeed({ accounts: [], moves: [] }),
+      }),
+    ),
+    Layer.provide(
+      ServerSettings.layerTest({
+        providerInstances: {
+          [accountA]: { driver: "claudeAgent", enabled: true },
+          [accountB]: { driver: "claudeAgent", enabled: true },
+          claude_c: { driver: "claudeAgent", enabled: true },
+        },
+      }),
+    ),
+    Layer.provideMerge(layerReceiptsTest),
+  );
+
+const balancingMessage = (
+  commandId: string,
+  modelSelection?: { readonly instanceId: ProviderInstanceId; readonly model: string },
+): OrchestrationV2Command => ({
+  type: "message.dispatch",
+  commandId: CommandId.make(commandId),
+  threadId: balancingThreadId,
+  messageId: MessageId.make(commandId),
+  text: "Next step.",
+  attachments: [],
+  ...(modelSelection === undefined ? {} : { modelSelection }),
+  dispatchMode: { type: "start_immediately" },
+  createdBy: "user",
+  creationSource: "web",
+});
+
+it.effect("balancing starts a new thread on the chosen account and logs it", () => {
+  const dispatched: Array<OrchestrationV2Command> = [];
+  const moves: Array<ClaudeAccountBalancer.ClaudeAccountMoveInput> = [];
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    yield* threads.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("command:balancing:create"),
+      threadId: balancingThreadId,
+      projectId: balancingProjectId,
+      title: "Balanced thread",
+      modelSelection: { instanceId: accountA, model: "claude-test" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const created = dispatched[0];
+    expect(created?.type === "thread.create" && created.modelSelection.instanceId).toBe(accountB);
+    expect(moves).toMatchObject([
+      { fromInstanceId: null, toInstanceId: accountB, reason: "new_thread" },
+    ]);
+  }).pipe(Effect.provide(layerBalancingTest({ runs: [], dispatched, moves })));
+});
+
+it.effect("balancing moves an idle thread before its next message", () => {
+  const dispatched: Array<OrchestrationV2Command> = [];
+  const moves: Array<ClaudeAccountBalancer.ClaudeAccountMoveInput> = [];
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    yield* threads.dispatch(balancingMessage("command:balancing:idle"));
+    const sent = dispatched[0];
+    expect(sent?.type === "message.dispatch" && sent.modelSelection?.instanceId).toBe(accountB);
+    expect(moves).toMatchObject([
+      { fromInstanceId: accountA, toInstanceId: accountB, reason: "limited" },
+    ]);
+  }).pipe(
+    Effect.provide(layerBalancingTest({ runs: [{ status: "completed" }], dispatched, moves })),
+  );
+});
+
+it.effect("balancing leaves a running thread and an explicit account choice alone", () => {
+  const dispatched: Array<OrchestrationV2Command> = [];
+  const moves: Array<ClaudeAccountBalancer.ClaudeAccountMoveInput> = [];
+  const runningLayer = layerBalancingTest({ runs: [{ status: "running" }], dispatched, moves });
+  const idleLayer = layerBalancingTest({ runs: [], dispatched, moves });
+  return Effect.gen(function* () {
+    yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.flatMap((threads) => threads.dispatch(balancingMessage("command:balancing:running"))),
+      Effect.provide(runningLayer),
+    );
+    const explicit = { instanceId: ProviderInstanceId.make("claude_c"), model: "claude-test" };
+    yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.flatMap((threads) =>
+        threads.dispatch(balancingMessage("command:balancing:explicit", explicit)),
+      ),
+      Effect.provide(idleLayer),
+    );
+    expect(
+      dispatched.map((command) =>
+        command.type === "message.dispatch" ? (command.modelSelection?.instanceId ?? null) : null,
+      ),
+    ).toEqual([null, "claude_c"]);
+    expect(moves).toEqual([]);
+  });
+});

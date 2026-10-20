@@ -1,5 +1,5 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
-import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import { accountMoveCommand, limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -4920,6 +4920,108 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         assert.equal(shell?.status, "failed");
         assert.equal(shell?.lastErrorClass, "usage_limit");
       }),
+  );
+
+  it.effect("continues a usage-limited thread on another account right away", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const events = yield* EventSink.EventSinkV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = ThreadId.make("runtime-layer-account-move");
+      const projectId = ProjectId.make("runtime-layer-account-move:project");
+      yield* seedProject({
+        projectId,
+        title: "Account move project",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: modelSelection,
+        createdAt: DateTime.formatIso(yield* DateTime.now),
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        projectId,
+        title: "Limited thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`${threadId}:message`),
+        threadId,
+        messageId: MessageId.make(`${threadId}:message`),
+        text: "Work on this.",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const run = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+      const now = yield* DateTime.now;
+      yield* events.write({
+        commandId: CommandId.make(`${threadId}:failure`),
+        events: [
+          {
+            id: EventId.make(`${threadId}:run`),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...run, status: "failed", completedAt: now },
+          },
+          {
+            id: EventId.make(`${threadId}:error`),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make(`${threadId}:error`),
+              type: "error",
+              threadId,
+              runId: run.id,
+              nodeId: run.rootNodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 2,
+              status: "failed",
+              title: "Usage limit reached",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              failure: {
+                class: "usage_limit",
+                message: "Plan limit reached.",
+                code: "usageLimitExceeded",
+                retryable: null,
+                resetAt: DateTime.formatIso(DateTime.add(now, { hours: 3 })),
+              },
+            },
+          },
+        ],
+      });
+      const candidate = (yield* projections.getLimitRecoveryCandidates({
+        now,
+        autoResume: true,
+        snooze: false,
+      })).find((row) => row.id === threadId);
+      assert.isDefined(candidate);
+      assert.deepEqual(candidate.modelSelection, modelSelection);
+      assert.isNull(accountMoveCommand(candidate, modelSelection.instanceId));
+      const move = accountMoveCommand(candidate, alternateInstanceId);
+      assert.isNotNull(move);
+      yield* orchestrator.dispatch(move);
+
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(after.thread.modelSelection.instanceId, alternateInstanceId);
+      const continued = after.runs.find((candidateRun) => candidateRun.id !== run.id);
+      assert.equal(continued?.providerInstanceId, alternateInstanceId);
+    }),
   );
 
   it.effect("keeps queued user selections and pauses only the limited provider", () =>

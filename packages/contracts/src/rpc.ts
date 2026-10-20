@@ -331,6 +331,7 @@ import {
   ProviderConsumeResetCreditResult,
 } from "./providerUsageLimits.ts";
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
+import { ClaudeBalancingStatus } from "./claudeBalancing.ts";
 import {
   StorageCleanupReport,
   DatabaseStorageStatus,
@@ -509,6 +510,7 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+  serverGetClaudeBalancingStatus: "server.getClaudeBalancingStatus",
 
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
@@ -897,6 +899,12 @@ const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
   payload: UsageSummaryInput,
   success: UsageSummary,
   error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
+});
+
+const WsServerGetClaudeBalancingStatusRpc = Rpc.make(WS_METHODS.serverGetClaudeBalancingStatus, {
+  payload: Schema.Struct({}),
+  success: ClaudeBalancingStatus,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsServerRefreshUsageRatesRpc = Rpc.make(WS_METHODS.serverRefreshUsageRates, {
@@ -1930,6 +1938,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerCheckOtlpEndpointRpc,
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
+  WsServerGetClaudeBalancingStatusRpc,
   WsServerSignalProcessRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,

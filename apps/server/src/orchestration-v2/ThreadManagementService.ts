@@ -56,6 +56,7 @@ import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimi
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ClaudeAccountBalancer from "../provider/ClaudeAccountBalancer.ts";
 
 export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
 
@@ -514,6 +515,7 @@ const make = Effect.gen(function* () {
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+  const balancer = yield* ClaudeAccountBalancer.ClaudeAccountBalancer;
 
   const assertProviderInstanceEnabled: ThreadManagementServiceShape["assertProviderInstanceEnabled"] =
     (input) =>
@@ -669,10 +671,94 @@ const make = Effect.gen(function* () {
     }
   };
 
+  /**
+   * Claude account balancing: a new thread starts on the account with the most
+   * room, and an idle thread moves before its next message when its account is
+   * limited or far ahead. A message that names another account is the user's
+   * choice and is left alone; so is anything sent while a run is active.
+   */
+  const balanceCommand = Effect.fn("ThreadManagementService.balanceCommand")(function* (
+    command: OrchestrationV2ServerCommand,
+  ): Effect.fn.Return<
+    {
+      readonly command: OrchestrationV2ServerCommand;
+      readonly move?: ClaudeAccountBalancer.ClaudeAccountMoveInput;
+    },
+    Orchestrator.OrchestratorV2Error
+  > {
+    if (
+      (command.type !== "thread.create" && command.type !== "message.dispatch") ||
+      !(yield* balancer.enabled)
+    ) {
+      return { command };
+    }
+    if (command.type === "thread.create") {
+      if (yield* hasReceipt(command.commandId)) return { command };
+      const target = yield* balancer.placeNewThread({
+        projectId: command.projectId,
+        modelSelection: command.modelSelection,
+      });
+      if (target === undefined) return { command };
+      return {
+        command: { ...command, modelSelection: { ...command.modelSelection, instanceId: target } },
+        move: {
+          id: command.commandId,
+          threadId: command.threadId,
+          threadTitle: command.title,
+          fromInstanceId: null,
+          toInstanceId: target,
+          reason: "new_thread",
+        },
+      };
+    }
+    if (
+      command.restartContinuationOfRunId !== undefined ||
+      command.usageLimitContinuationOfRunId !== undefined ||
+      (yield* hasReceipt(command.commandId))
+    ) {
+      return { command };
+    }
+    const projection = yield* orchestrator.getThreadRecords(command.threadId, ["runs"]);
+    const current = projection.thread.modelSelection;
+    if (
+      (command.modelSelection !== undefined &&
+        command.modelSelection.instanceId !== current.instanceId) ||
+      projection.runs.some((run) => isActiveRun(run) || run.status === "queued")
+    ) {
+      return { command };
+    }
+    const move = yield* balancer.chooseMove({
+      projectId: projection.thread.projectId,
+      instanceId: current.instanceId,
+    });
+    if (move === undefined) return { command };
+    return {
+      command: {
+        ...command,
+        modelSelection: { ...(command.modelSelection ?? current), instanceId: move.instanceId },
+      },
+      move: {
+        id: command.commandId,
+        threadId: command.threadId,
+        threadTitle: projection.thread.title,
+        fromInstanceId: current.instanceId,
+        toInstanceId: move.instanceId,
+        reason: move.reason,
+      },
+    };
+  });
+
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
     ensureCommandTranscripts(command).pipe(
-      Effect.andThen(assertDispatchTargetEnabled(command)),
-      Effect.andThen(orchestrator.dispatch(command)),
+      Effect.andThen(balanceCommand(command)),
+      Effect.flatMap((balanced) =>
+        assertDispatchTargetEnabled(balanced.command).pipe(
+          Effect.andThen(orchestrator.dispatch(balanced.command)),
+          Effect.tap(() =>
+            balanced.move === undefined ? Effect.void : balancer.recordMove(balanced.move),
+          ),
+        ),
+      ),
     );
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>

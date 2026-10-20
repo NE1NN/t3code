@@ -52,6 +52,23 @@ describe("fallbackTextGenerationModelSelection", () => {
 });
 
 describe("serverSettings helpers", () => {
+  it("keeps Claude balancing off by default and merges a partial change", () => {
+    expect(DEFAULT_SERVER_SETTINGS.claudeBalancing).toEqual({
+      enabled: false,
+      newThreadsInstanceId: null,
+    });
+    const pinned = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      claudeBalancing: { enabled: true, newThreadsInstanceId: ProviderInstanceId.make("claude_b") },
+    });
+    expect(
+      applyServerSettingsPatch(pinned, { claudeBalancing: { enabled: false } }).claudeBalancing,
+    ).toEqual({ enabled: false, newThreadsInstanceId: "claude_b" });
+    expect(
+      applyServerSettingsPatch(pinned, { claudeBalancing: { newThreadsInstanceId: null } })
+        .claudeBalancing,
+    ).toEqual({ enabled: true, newThreadsInstanceId: null });
+  });
+
   it("changes a cleanup rule without replacing the machine's other rules", () => {
     const enabled = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       storageCleanup: { worktreeAfterDays: 8, worktreeOnMerge: true, logsAfterDays: 30 },
