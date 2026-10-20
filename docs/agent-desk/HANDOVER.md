@@ -56,8 +56,12 @@ Find how T3 already gives agents its own tools (agents in T3 threads have `html_
 ## State of the box right now
 
 - Reach it with `ssh -o ProxyCommand=none ubuntu@100.74.186.66` (Tailscale). `ssh hindie-box` goes through AWS SSM and needs `aws login --profile lyra`.
-- **Official T3 v0.1.0** is running ad hoc: `~/.local/bin/t3 serve --host 100.74.186.66 --no-browser`, started with nohup from `~/Projects`, log `~/t3-serve.log`, data in `~/.t3`. One headless browser was paired. A demo thread holds a sample decision. Pair a new browser with `t3 pair` on the box.
-- **CloudCLI** runs as `agent-desk.service` (systemd user unit) on port 3001 from `~/Projects/agent-desk`. Its login is in `~/agent-desk-login.txt`. Disable it once the fork is up.
+- **The fork runs as `t3code-agent-desk.service`** (systemd user unit, enabled, linger on) on `100.74.186.66:3773`.
+  It runs `node apps/server/dist/bin.mjs serve` from `~/Projects/t3code` with Node 24 and keeps its data in `~/.agent-desk-t3`.
+  Logs: `journalctl --user -u t3code-agent-desk`.
+- **The official T3 v0.1.0** that ran ad hoc on :3773 is stopped. Its data in `~/.t3` is left as it was; nothing of Hindie's was in it.
+- **CloudCLI** (`agent-desk.service`, port 3001) is stopped and disabled.
+- Projects on the fork: `~/agent-desk-e2e` (test scratch) and `~/agent-desk-orchestrator` (the orchestrator, with its role in `CLAUDE.md`).
 - **Keepalive**: the box powers off one hour after the last activity (`/usr/local/sbin/idle-shutdown`). A loop touching `~/.canopy/2b444c97/box/busy` every 10 minutes keeps it on until about 2026-10-21 00:00 UTC. Its pid is in `~/.agent-desk-keepalive.pid`. Kill it when the overnight work is done.
 - Demo media: `~/agent-desk-demo/` on the box. Two 540p renders for testing are on the Mac in the Claude scratchpad, and the originals are `~/Documents/PR-screenshots/pr-1454-20261008-1533/render-60s-a1.mp4` and `render-60s.mp4` (casual car ride content type; take 1 runs 60s with the product from 0:54, take 2 ends at 0:50).
 - The box runs Node 22 by default; T3 from source needs Node 24.
@@ -66,8 +70,45 @@ Find how T3 already gives agents its own tools (agents in T3 threads have `html_
 
 ## What Hindie does once
 
-1. Run `claude setup-token` for each Claude account, signed in as that account, and paste the tokens into Settings › Accounts.
-2. Open `http://100.74.186.66:3773` and pair the browser.
+1. Pair the browser. On the Mac run `ssh -o ProxyCommand=none ubuntu@100.74.186.66 'cd ~/Projects/t3code && ~/.local/node24/bin/node apps/server/dist/bin.mjs pair --base-dir ~/.agent-desk-t3 --ttl 15m --label "Hindie Mac"'` and open the link it prints.
+   Use the same command with another label for the phone.
+2. Add the second Claude account: sign in to it in a terminal, run `claude setup-token`, then Settings › Accounts › Add account with a name and the token.
+   The account the box is logged in to (hsuputra@gmail.com) is already there as "Claude".
+3. Switch on "Balance across accounts" in Settings › Accounts.
+4. Import projects from the sidebar (Add project › Local folder, or the welcome import) as needed.
+
+## Deploying a change
+
+On the box: `cd ~/Projects/t3code && git pull`, then with `PATH="$HOME/.local/node24/bin:$HOME/.local/share/vite-plus/bin:$PATH"` run `vp i` (only when the lockfile changed) and `vp run --filter t3 build`, then `systemctl --user restart t3code-agent-desk`.
+The build takes about a minute. A restart releases any agent waiting on a decision with `no_answer_yet`; the decision stays in the queue and its answer arrives as a message.
+
+## How decisions work
+
+- Agents call `request_decision` (T3's `t3-code` MCP server, available in every thread). `blocking=true` holds the tool call until Hindie picks or writes back, up to 50 minutes by default; `blocking=false` returns at once and the answer arrives later as a message naming the decision.
+- "Ask agent" on a card sends the message to the agent. A waiting agent gets it as the tool result; an idle one gets it as a message. The agent answers with `reply_to_decision`, which can also replace the options, the recommendation and the media.
+- A decision is a T3 user-input request with a `decision` field, so it also shows in its thread's composer and can be answered there.
+- The queue reads every pending question, including native ones from providers. Native ones with more than one question are answered in their thread.
+
+## Orchestrator
+
+T3 already gives every thread the orchestration tools (`t3_thread_list`, `t3_thread_read`, `t3_thread_send`, `t3_thread_wait`, `t3_thread_interrupt`, `t3_thread_launch`, `create_threads`, `delegate_task`, `t3_pending_request_list`).
+The orchestrator is a thread in the `agent-desk-orchestrator` project; its `CLAUDE.md` gives it the role.
+Tested: it listed another project's threads, started a thread, waited for that thread's decision and reported the decisionId without answering it.
+`create_threads` always uses the caller's project, so the orchestrator starts work in other projects with `t3_thread_launch`.
+
+## Tested on the box (2026-10-21)
+
+- A Claude thread posted a blocking decision with two 540p 60s renders. The sidebar showed the violet count and "Decision" on the thread; the queue showed the card with both videos playing with sound.
+- "Ask agent" reached the waiting agent; it checked the files with ffprobe, replied on the card, replaced the captions and changed the recommendation, and the pick followed it.
+- Submitting reached the agent, which carried on and wrote the answer to a file. A non-blocking, can't-undo decision from a second thread was answered the same way and its idle thread acted on the message.
+- Phone width: list, then detail with a back link, answering from the phone.
+- Settings › Accounts shows live 5-hour and weekly usage for the box account.
+
+## Not done or not verified
+
+- Balancing with two real accounts: needs the second token. Whether a `setup-token` account reports usage is not confirmed.
+- "Implement plan in new thread" starts on the composer's account, not the balanced one.
+- The thread's own question card shows the options but not the decision's context and media; open the Decisions tab for those.
 
 ## Status
 
@@ -79,6 +120,6 @@ Update this list as work lands, and commit and push it.
 - [x] Decisions tab in the web app
 - [x] Balancing across Claude accounts
 - [x] Server update turned off for this build
-- [ ] Build and run the fork on the box as a service on :3773, CloudCLI off
-- [ ] End-to-end test on the box
-- [ ] Orchestrator session set up against T3's MCP
+- [x] Build and run the fork on the box as a service on :3773, CloudCLI off
+- [x] End-to-end test on the box
+- [x] Orchestrator session set up against T3's MCP
