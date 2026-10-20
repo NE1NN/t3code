@@ -7774,6 +7774,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.recommendedOption === undefined
             ? {}
             : { recommendedOption: command.recommendedOption }),
+          ...(command.media === undefined ? {} : { media: command.media }),
           ...(command.agentWaiting === undefined ? {} : { agentWaiting: command.agentWaiting }),
           messages:
             command.agentMessage === undefined

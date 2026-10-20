@@ -26,6 +26,16 @@ const WaitMinutes = Schema.Int.check(
   description: "How long to wait for the user before returning no_answer_yet. Defaults to 50.",
 });
 
+const Media = Schema.Array(
+  Schema.Struct({
+    path: BoundedText(4096, "Absolute path to a video, image, audio file or pdf."),
+    label: Schema.optional(BoundedText(120, "Short name, e.g. '30s render, take 2'.")),
+    caption: Schema.optional(
+      BoundedText(300, "One line on what passes or fails, e.g. 'Fails: logo at 0:12 is cropped'."),
+    ),
+  }),
+).check(Schema.isMaxLength(8));
+
 const DecisionResult = Schema.Struct({
   decisionId: RuntimeRequestId,
   status: Schema.Literals(["posted", "answered", "user_message", "dismissed", "no_answer_yet"]),
@@ -51,20 +61,7 @@ const RequestDecisionTool = Tool.make("request_decision", {
       description:
         "True when you cannot continue without the answer: the call waits for it. False when you can keep working on something else.",
     }),
-    media: Schema.optional(
-      Schema.Array(
-        Schema.Struct({
-          path: BoundedText(4096, "Absolute path to a video, image, audio file or pdf."),
-          label: Schema.optional(BoundedText(120, "Short name, e.g. '30s render, take 2'.")),
-          caption: Schema.optional(
-            BoundedText(
-              300,
-              "One line on what passes or fails, e.g. 'Fails: logo at 0:12 is cropped'.",
-            ),
-          ),
-        }),
-      ).check(Schema.isMaxLength(8)),
-    ),
+    media: Schema.optional(Media),
     waitMinutes: Schema.optional(WaitMinutes),
   }),
   success: DecisionResult,
@@ -80,12 +77,18 @@ const RequestDecisionTool = Tool.make("request_decision", {
 
 const ReplyToDecisionTool = Tool.make("reply_to_decision", {
   description:
-    "Answer the user's message on one of your open decisions, and optionally replace its options or recommendation. With wait=true the call then waits for the user's choice or next message, as request_decision does.",
+    "Answer the user's message on one of your open decisions, and optionally replace its options, recommendation or media. With wait=true the call then waits for the user's choice or next message, as request_decision does.",
   parameters: Schema.Struct({
     decisionId: RuntimeRequestId,
     message: BoundedText(4000, "Your reply to the user, in plain sentences."),
     options: Schema.optional(Options),
     recommended: Schema.optional(Recommended),
+    media: Schema.optional(
+      Media.annotate({
+        description:
+          "Replaces all of the decision's media, e.g. to correct a caption or add a new render. Pass every item to keep.",
+      }),
+    ),
     wait: Schema.Boolean.annotate({
       description: "True to wait for the user's choice or next message before returning.",
     }),

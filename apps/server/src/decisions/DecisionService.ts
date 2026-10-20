@@ -154,6 +154,7 @@ export class DecisionService extends Context.Service<
         readonly message: string;
         readonly options?: ReadonlyArray<DecisionOption> | undefined;
         readonly recommendedOption?: string | undefined;
+        readonly media?: ReadonlyArray<DecisionMediaInput> | undefined;
         readonly wait: boolean;
         readonly waitMinutes?: number | undefined;
       },
@@ -404,6 +405,10 @@ const make = Effect.gen(function* () {
       if (current.request.status !== "pending") {
         return yield* new DecisionError({ reason: "settled" });
       }
+      const media =
+        input.media === undefined
+          ? undefined
+          : yield* Effect.forEach(input.media, (item) => storeMedia(caller.threadId, item));
       const uuid = yield* newId;
       yield* dispatch({
         type: "decision.update",
@@ -415,6 +420,7 @@ const make = Effect.gen(function* () {
         ...(input.recommendedOption === undefined
           ? {}
           : { recommendedOption: input.recommendedOption }),
+        ...(media === undefined ? {} : { media }),
         agentWaiting: input.wait,
       });
       if (!input.wait) {

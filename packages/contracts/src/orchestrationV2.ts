@@ -3138,6 +3138,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     agentMessage: Schema.optional(Schema.String),
     options: Schema.optional(OrchestrationV2UserInputQuestion.fields.options),
     recommendedOption: Schema.optional(Schema.String),
+    media: Schema.optional(Schema.Array(OrchestrationV2DecisionMedia)),
     agentWaiting: Schema.optional(Schema.Boolean),
   }),
 ]);

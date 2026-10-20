@@ -75,6 +75,7 @@ const handlers = {
           message: input.message,
           options: input.options,
           recommendedOption: input.recommended,
+          media: input.media,
           wait: input.wait,
           waitMinutes: input.waitMinutes,
         })

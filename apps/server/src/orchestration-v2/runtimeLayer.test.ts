@@ -1618,11 +1618,24 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         requestId: waiting.requestId,
         agentMessage: "No, it sits inside the safe area.",
         recommendedOption: "Take B",
+        media: [
+          {
+            attachmentId: "runtime-decision-take-b-mp4",
+            name: "take-b.mp4",
+            mimeType: "video/mp4",
+            sizeBytes: 10,
+            caption: "Passes.",
+          },
+        ],
         agentWaiting: true,
       });
       const updated = yield* decisionOf(waiting.threadId);
       assert.equal(updated?.agentWaiting, true);
       assert.equal(updated?.recommendedOption, "Take B");
+      assert.deepEqual(
+        updated?.media.map((media) => media.caption),
+        ["Passes."],
+      );
       assert.equal(updated?.messages.at(-1)?.author, "agent");
 
       const answeredBefore = yield* projectionStore.countAnsweredQuestions(DateTime.makeUnsafe(0));
