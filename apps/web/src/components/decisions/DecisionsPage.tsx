@@ -95,7 +95,13 @@ export function DecisionsPage({
               <DecisionQueueRow
                 key={decisionKey(item)}
                 item={item}
-                selected={current !== null && decisionKey(current) === decisionKey(item)}
+                selected={
+                  current !== null && decisionKey(current) === decisionKey(item)
+                    ? explicit
+                      ? "always"
+                      : "desktop"
+                    : null
+                }
                 onSelect={() => onSelect(decisionKey(item))}
               />
             ))}
@@ -152,7 +158,8 @@ function DecisionQueueRow({
   onSelect,
 }: {
   readonly item: DecisionEntry;
-  readonly selected: boolean;
+  /** The phone shows the detail only after a tap, so the fallback pick is marked on desktop only. */
+  readonly selected: "always" | "desktop" | null;
   readonly onSelect: () => void;
 }) {
   const nowMinute = useNowMinute();
@@ -163,10 +170,14 @@ function DecisionQueueRow({
     <button
       type="button"
       onClick={onSelect}
-      aria-current={selected ? "true" : undefined}
+      aria-current={selected === "always" ? "true" : undefined}
       className={cn(
         "flex w-full flex-col items-stretch gap-1.5 rounded-lg border bg-card px-3.5 py-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-        selected ? "border-primary ring-3 ring-primary/12" : "hover:bg-accent/40",
+        selected === "always"
+          ? "border-primary ring-3 ring-primary/12"
+          : selected === "desktop"
+            ? "hover:bg-accent/40 md:border-primary md:ring-3 md:ring-primary/12 md:hover:bg-card"
+            : "hover:bg-accent/40",
       )}
     >
       {isBlocking(item) || isIrreversible(item) || (videoCount ?? 0) > 0 ? (
