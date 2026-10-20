@@ -197,6 +197,11 @@ export interface DismissThreadUserInputInput extends ThreadCommandInput {
   readonly requestId: RuntimeRequestId;
 }
 
+export interface DiscussThreadDecisionInput extends ThreadCommandInput {
+  readonly requestId: RuntimeRequestId;
+  readonly text: string;
+}
+
 export interface RevertThreadCheckpointInput extends ThreadCommandInput {
   readonly restoreFiles?: boolean;
   readonly checkpointId?: string;
@@ -877,6 +882,18 @@ export const dismissThreadUserInput = Effect.fn("EnvironmentCommands.dismissThre
       commandId: yield* allocateCommandId(input),
       threadId: input.threadId,
       requestId: input.requestId,
+    });
+  },
+);
+
+export const discussThreadDecision = Effect.fn("EnvironmentCommands.discussThreadDecision")(
+  function* (input: DiscussThreadDecisionInput) {
+    return yield* dispatch({
+      type: "decision.discuss",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      requestId: input.requestId,
+      text: input.text,
     });
   },
 );
