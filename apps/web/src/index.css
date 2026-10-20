@@ -240,6 +240,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-diff-deletion-foreground: var(--diff-deletion-foreground);
   --color-info-foreground: var(--info-foreground);
   --color-info: var(--info);
+  --color-decision: var(--decision);
+  --color-decision-foreground: var(--decision-foreground);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-ring: var(--ring);
   --color-input: var(--contrast-input);
@@ -1132,6 +1134,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --destructive-foreground: var(--error-foreground);
   --info: var(--color-blue-500);
   --info-foreground: var(--color-blue-700);
+  --decision: var(--color-violet-700);
+  --decision-foreground: var(--color-violet-700);
   --success: var(--color-emerald-500);
   --success-foreground: var(--color-emerald-700);
   --warning: var(--color-amber-500);
@@ -1183,6 +1187,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --border: --alpha(var(--color-white) / 6%);
     --input: --alpha(var(--color-white) / 8%);
     --info-foreground: var(--color-blue-400);
+    --decision: var(--color-violet-500);
+    --decision-foreground: var(--color-violet-300);
     --success-foreground: var(--color-emerald-400);
     --warning-foreground: var(--color-amber-400);
     --warning-surface: color-mix(in srgb, var(--warning) 16%, transparent);
