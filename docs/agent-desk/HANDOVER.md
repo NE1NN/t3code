@@ -74,11 +74,11 @@ Find how T3 already gives agents its own tools (agents in T3 threads have `html_
 Update this list as work lands, and commit and push it.
 
 - [x] Fork pingdotgg/t3code to NE1NN/t3code, branch `agent-desk`, this handover
-- [ ] Read the internals docs and find how agent tools, threads, migrations and usage limits work
-- [ ] Decisions server: tables, agent tools, media, answers back to threads
-- [ ] Decisions tab in the web app
-- [ ] Balancing across Claude accounts
-- [ ] Server update turned off for this build
+- [x] Read the internals docs and find how agent tools, threads, migrations and usage limits work
+- [x] Decisions server: tables, agent tools, media, answers back to threads
+- [x] Decisions tab in the web app
+- [x] Balancing across Claude accounts
+- [x] Server update turned off for this build
 - [ ] Build and run the fork on the box as a service on :3773, CloudCLI off
 - [ ] End-to-end test on the box
 - [ ] Orchestrator session set up against T3's MCP
