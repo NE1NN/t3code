@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>T3 Code decisions on a phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#FCFCFC}
+a{color:#1E4FD6}a:hover{color:#173FAD}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; overflow: hidden; display: flex; flex-direction: column; font-family: -apple-system, system-ui, 'Segoe UI', sans-serif; color: #27272A; background: #FCFCFC; font-size: 14px; line-height: 1.45">
+<header style="display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 16px; border-bottom: 1px solid #F0F0F2">
+<button type="button" aria-label="Open sidebar" style="width: 44px; height: 44px; margin-left: -12px; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#71717A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg>
+</button>
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Decisions</h1>
+<span style="min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: #6D28D9; color: #FFFFFF; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center">4</span>
+</header>
+
+<div style="flex: 1; overflow-y: auto; padding: 14px 16px 20px; display: flex; flex-direction: column; gap: 10px">
+<p style="margin: 0; font-size: 13px; color: #71717A">4 waiting · 2 blocking an agent</p>
+<div role="group" aria-label="Filter" style="display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{filters}}" as="f" hint-placeholder-count="3">
+<button type="button" onClick="{{f.pick}}" aria-pressed="{{f.on}}" style="{{f.style}}">{{f.label}}</button>
+</sc-for>
+</div>
+<sc-for list="{{rows}}" as="item" hint-placeholder-count="4">
+<a href="T3PhoneDecision.dc.html" style="display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 12px; background: #FFFFFF; border: 1px solid #E4E4E7; text-decoration: none; color: #27272A">
+<span style="display: flex; flex-wrap: wrap; gap: 6px">
+<sc-if value="{{item.blocking}}" hint-placeholder-val="{{true}}"><span style="font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A">Blocking</span></sc-if>
+<sc-if value="{{item.irreversible}}" hint-placeholder-val="{{false}}"><span style="font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: #FEF2F2; color: #B91C1C; border: 1px solid #FECACA">Can't undo</span></sc-if>
+<sc-if value="{{item.renders}}" hint-placeholder-val="{{false}}"><span style="font-size: 11px; padding: 1px 8px; border-radius: 999px; color: #52525B; border: 1px solid #E4E4E7">2 renders</span></sc-if>
+</span>
+<span style="font-size: 15px; font-weight: 500">{{item.title}}</span>
+<span style="display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: #71717A">
+<span>{{item.thread}}</span>
+<span>{{item.age}}</span>
+</span>
+</a>
+</sc-for>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+var ROWS = [
+  { title: 'Which 60s render ships as the best 60s?', thread: 'casual-car-ride-content-type', age: '4m', blocking: true, irreversible: false, renders: true },
+  { title: 'Price for a v1 influencer when the brand pays?', thread: 'v1-influencer-pricing', age: '18m', blocking: true, irreversible: false, renders: false },
+  { title: 'Delete the old Hyro tile files from storage?', thread: 'remove-hyro-tiles', age: '42m', blocking: false, irreversible: true, renders: false },
+  { title: 'Pause 5 idle threads to free memory on the box?', thread: 'orchestrator', age: '1h', blocking: false, irreversible: false, renders: false }
+];
+var PILL = 'min-height: 36px; padding: 0 14px; border-radius: 999px; font: inherit; font-size: 13px; cursor: pointer; ';
+
+class Component extends DCLogic {
+  state = { filter: 'all' };
+
+  renderVals() {
+    var self = this;
+    var f = this.state.filter;
+    var defs = [
+      { id: 'all', label: 'All 4' },
+      { id: 'blocking', label: 'Blocking 2' },
+      { id: 'undo', label: 'Can’t undo 1' }
+    ];
+    return {
+      filters: defs.map(function (d) {
+        var on = d.id === f;
+        return { label: d.label, on: on, style: PILL + (on ? 'background: #27272A; color: #FFFFFF; border: 1px solid #27272A' : 'background: #FFFFFF; color: #3F3F46; border: 1px solid #E4E4E7'), pick: function () { self.setState({ filter: d.id }); } };
+      }),
+      rows: ROWS.filter(function (r) { return f === 'all' || (f === 'blocking' && r.blocking) || (f === 'undo' && r.irreversible); })
+    };
+  }
+}
+</script>
+</body>
+</html>
