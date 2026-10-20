@@ -104,7 +104,12 @@ export function DecisionsPage({
                 <Spinner />
               </div>
             ) : shown.length === 0 ? (
-              <p className="rounded-lg border border-dashed px-4 py-7 text-center text-muted-foreground text-sm">
+              <p
+                className={cn(
+                  "rounded-lg border border-dashed px-4 py-7 text-center text-muted-foreground text-sm",
+                  queue.items.length === 0 && "md:hidden",
+                )}
+              >
                 Nothing waiting on you.
               </p>
             ) : null}
@@ -206,7 +211,9 @@ function DecisionDetail({
   const options = question?.options ?? [];
   const recommended =
     options.find((option) => option.label === decision?.recommendedOption) ?? options[0];
-  const [picked, setPicked] = useState(recommended?.label ?? null);
+  // Follows the agent's recommendation, which can change mid-discussion, until the user picks.
+  const [userPick, setPicked] = useState<string | null>(null);
+  const picked = userPick ?? recommended?.label ?? null;
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<"answer" | "ask" | null>(null);
   const [error, setError] = useState<string | null>(null);
