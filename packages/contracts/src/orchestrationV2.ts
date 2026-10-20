@@ -1146,6 +1146,47 @@ export const OrchestrationV2UserInputQuestion = Schema.Struct({
 });
 export type OrchestrationV2UserInputQuestion = typeof OrchestrationV2UserInputQuestion.Type;
 
+export const OrchestrationV2DecisionMedia = Schema.Struct({
+  attachmentId: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  mimeType: TrimmedNonEmptyString,
+  sizeBytes: NonNegativeInt,
+  label: Schema.optional(Schema.String),
+  /** One line on what passes or fails, e.g. "Fails: logo at 0:12 is cropped". */
+  caption: Schema.optional(Schema.String),
+});
+export type OrchestrationV2DecisionMedia = typeof OrchestrationV2DecisionMedia.Type;
+
+export const OrchestrationV2DecisionMessage = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  author: Schema.Literals(["agent", "user"]),
+  text: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type OrchestrationV2DecisionMessage = typeof OrchestrationV2DecisionMessage.Type;
+
+/** The single question id on a `request_decision` card. */
+export const DECISION_QUESTION_ID = "decision";
+
+/**
+ * The card an agent posts with `request_decision`, carried on its
+ * `user_input_request` item so answering reuses the question flow.
+ */
+export const OrchestrationV2Decision = Schema.Struct({
+  context: Schema.String,
+  recommendedOption: Schema.optional(Schema.String),
+  reversible: Schema.Boolean,
+  blocking: Schema.Boolean,
+  media: Schema.Array(OrchestrationV2DecisionMedia),
+  messages: Schema.Array(OrchestrationV2DecisionMessage),
+  /**
+   * The agent's tool call is still open and takes the answer as its result,
+   * so answering must not also send it as a message.
+   */
+  agentWaiting: Schema.Boolean,
+});
+export type OrchestrationV2Decision = typeof OrchestrationV2Decision.Type;
+
 const OrchestrationV2PlanArtifactBaseFields = {
   id: PlanId,
   threadId: ThreadId,
@@ -1389,6 +1430,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     questions: Schema.Array(OrchestrationV2UserInputQuestion),
     questionAnswer: Schema.optional(UserInputAttachmentAnswerPayload),
     responseMode: Schema.optional(Schema.Literal("message")),
+    decision: Schema.optional(OrchestrationV2Decision),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2148,6 +2190,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     questions: Schema.Array(OrchestrationV2UserInputQuestion),
     questionAnswer: Schema.optional(UserInputAttachmentAnswerPayload),
     responseMode: Schema.optional(Schema.Literal("message")),
+    decision: Schema.optional(OrchestrationV2Decision),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2917,6 +2960,14 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     requestId: RuntimeRequestId,
   }),
+  /** The user writes back on a decision card instead of picking an option. */
+  Schema.Struct({
+    type: Schema.Literal("decision.discuss"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: RuntimeRequestId,
+    text: TrimmedNonEmptyString,
+  }),
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback"),
     restoreFiles: Schema.optional(Schema.Boolean),
@@ -3064,6 +3115,30 @@ const OrchestrationV2InternalCommand = Schema.Union([
     reason: Schema.String,
     placeholder: Schema.optional(Schema.String),
     secretStatus: OrchestrationV2SecretRequestStatus,
+  }),
+  /** Internal: only the request_decision tool knows the run that asked. */
+  Schema.Struct({
+    type: Schema.Literal("decision.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    parentNodeId: NodeId,
+    requestId: RuntimeRequestId,
+    requestNodeId: NodeId,
+    turnItemId: TurnItemId,
+    title: TrimmedNonEmptyString,
+    options: OrchestrationV2UserInputQuestion.fields.options,
+    decision: OrchestrationV2Decision,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("decision.update"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    requestId: RuntimeRequestId,
+    agentMessage: Schema.optional(Schema.String),
+    options: Schema.optional(OrchestrationV2UserInputQuestion.fields.options),
+    recommendedOption: Schema.optional(Schema.String),
+    agentWaiting: Schema.optional(Schema.Boolean),
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
