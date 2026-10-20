@@ -21,6 +21,7 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
+  | "/settings/accounts"
   | "/settings/integrations"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
@@ -79,6 +80,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Providers",
+  "/settings/accounts": "Accounts",
   "/settings/integrations": "Integrations",
   "/settings/scheduled-tasks": "Scheduled Tasks",
   "/settings/source-control": "Source Control",
@@ -648,6 +650,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "claude-accounts",
+    title: "Claude accounts",
+    to: "/settings/accounts",
+    searchTerms: ["claude accounts setup-token token add second account usage limits weekly"],
+  },
+  {
+    id: "claude-balancing",
+    title: "Balance across accounts",
+    to: "/settings/accounts",
+    searchTerms: ["claude balancing load limit switch move threads most room"],
+  },
+  {
     id: "usage-providers",
     title: "Usage providers",
     to: "/settings/providers",
@@ -1014,6 +1028,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
+  "/settings/accounts": null,
   "/settings/integrations": null,
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",

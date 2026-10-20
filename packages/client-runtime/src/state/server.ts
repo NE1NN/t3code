@@ -1113,6 +1113,12 @@ export function createServerEnvironmentAtoms<R, E>(
           ),
         ),
     }),
+    claudeBalancingStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:claude-balancing-status",
+      tag: WS_METHODS.serverGetClaudeBalancingStatus,
+      staleTimeMs: 0,
+      refreshIntervalMs: 30_000,
+    }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,
